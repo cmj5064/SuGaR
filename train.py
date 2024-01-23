@@ -27,6 +27,9 @@ if __name__ == "__main__":
     parser.add_argument('-i', '--iteration_to_load', 
                         type=int, default=7000, 
                         help='iteration to load.')
+    parser.add_argument('--resolution', 
+                        type=int, default=1, 
+                        help='gt image resolution downsample rate.') # NOTE: rescale gt image due to OOM issue
     
     # Regularization for coarse SuGaR
     parser.add_argument('-r', '--regularization_type', type=str,
@@ -120,6 +123,7 @@ if __name__ == "__main__":
         'estimation_factor': 0.2,
         'normal_factor': 0.2,
         'gpu': args.gpu,
+        'resolution': args.resolution, # NOTE: rescale gt image due to OOM issue
     })
     if args.regularization_type == 'sdf':
         coarse_sugar_path = coarse_training_with_sdf_regularization(coarse_args)
