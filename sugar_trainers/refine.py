@@ -331,6 +331,7 @@ def refined_training(args):
         load_gt_images=True,
         eval_split=use_eval_split,
         eval_split_interval=n_skip_images_for_eval_split,
+        resolution=args.resolution, # NOTE: rescale gt image due to OOM issue
         )
 
     CONSOLE.print(f'{len(nerfmodel.training_cameras)} training images detected.')

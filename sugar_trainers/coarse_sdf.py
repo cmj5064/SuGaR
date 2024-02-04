@@ -54,7 +54,8 @@ def coarse_training_with_sdf_regularization(args):
     # -----Optimization parameters-----
 
     # Learning rates and scheduling
-    num_iterations = 15_000  # Changed
+    # num_iterations = 15_000  # Changed
+    num_iterations = args.num_sdf_iterations
 
     spatial_lr_scale = None
     position_lr_init=0.00016
@@ -73,7 +74,8 @@ def coarse_training_with_sdf_regularization(args):
         densify_until_iter = 7000 - 7000 # 7000
     else:
         densify_from_iter = 500 # 500  # Maybe reduce this, since we have a better initialization?
-        densify_until_iter = 7000 # 7000
+        # densify_until_iter = 7000 # 7000
+        densify_until_iter = args.iteration_to_load
 
     if heavy_densification:
         densification_interval = 50  # 100
@@ -105,7 +107,8 @@ def coarse_training_with_sdf_regularization(args):
     # Regularization
     enforce_entropy_regularization = True
     if enforce_entropy_regularization:
-        start_entropy_regularization_from = 7000
+        # start_entropy_regularization_from = 7000
+        start_entropy_regularization_from = args.iteration_to_load
         end_entropy_regularization_at = 9000  # TODO: Change
         entropy_regularization_factor = 0.1
             
@@ -181,8 +184,10 @@ def coarse_training_with_sdf_regularization(args):
         # regularity_knn = 8
         regularity_samples = -1 # Retry with 1000, 10000
         reset_neighbors_every = 500  # 500 until now
-        regularize_from = 7000  # 0 until now
-        start_reset_neighbors_from = 7000+1  # 0 until now (should be equal to regularize_from + 1?)
+        # regularize_from = 7000  # 0 until now
+        regularize_from = args.iteration_to_load
+        # start_reset_neighbors_from = 7000+1  # 0 until now (should be equal to regularize_from + 1?)
+        start_reset_neighbors_from = args.iteration_to_load + 1
         prune_when_starting_regularization = False
     else:
         regularize = False
@@ -218,9 +223,9 @@ def coarse_training_with_sdf_regularization(args):
         
 
     # -----Log and save-----
-    print_loss_every_n_iterations = 50
+    print_loss_every_n_iterations = 100
     save_model_every_n_iterations = 1_000_000
-    save_milestones = [9000, 12_000, 15_000]
+    save_milestones = [7000, 8000, 9000, 12_000, 15_000]
 
     # ====================End of parameters====================
 
@@ -457,7 +462,8 @@ def coarse_training_with_sdf_regularization(args):
     t0 = time.time()
     
     if initialize_from_trained_3dgs:
-        iteration = 7000 - 1
+        # iteration = 7000 - 1
+        iteration  = iteration_to_load - 1
     
     for batch in range(9_999_999):
         if iteration >= num_iterations:

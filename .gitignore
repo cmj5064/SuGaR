@@ -5,6 +5,9 @@ output*
 *.pyc
 *.ply
 *.obj
+*.mtl
+*.png
+*.txt
 sugar_tests.ipynb
 
 # Byte-compiled / optimized / DLL files
@@ -140,3 +143,7 @@ learnableearthparser/fast_sampler/_sampler.c
 
 # viewer setting
 sugar_viewer/src/scene_to_load.json
+
+# folder
+dataset/
+gs_outputs/

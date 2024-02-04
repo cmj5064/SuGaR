@@ -2,9 +2,13 @@ import argparse
 from sugar_utils.general_utils import str2bool
 from sugar_trainers.coarse_density import coarse_training_with_density_regularization
 from sugar_trainers.coarse_sdf import coarse_training_with_sdf_regularization
-from sugar_extractors.coarse_mesh import extract_mesh_from_coarse_sugar
+from sugar_extractors.coarse_mesh import extract_mesh_from_coarse_sugar, extract_mesh_and_texture_from_coarse_sugar
 from sugar_trainers.refine import refined_training
 from sugar_extractors.refined_mesh import extract_mesh_and_texture_from_refined_sugar
+import os
+import sys
+import time
+from datetime import timedelta
 
 
 class AttrDict(dict):
@@ -24,6 +28,10 @@ if __name__ == "__main__":
     parser.add_argument('-c', '--checkpoint_path',
                         type=str, 
                         help='(Required) path to the vanilla 3D Gaussian Splatting Checkpoint to load.')
+    parser.add_argument('-o', '--output_path',
+                        type=str, 
+                        help='path to the experiment output directory.',
+                        default=None)
     parser.add_argument('-i', '--iteration_to_load', 
                         type=int, default=7000, 
                         help='iteration to load.')
@@ -36,6 +44,10 @@ if __name__ == "__main__":
                         help='(Required) Type of regularization to use for coarse SuGaR. Can be "sdf" or "density". ' 
                         'For reconstructing detailed objects centered in the scene with 360° coverage, "density" provides a better foreground mesh. '
                         'For a stronger regularization and a better balance between foreground and background, choose "sdf".')
+    parser.add_argument('--sdf_iterations', type=int, default=15_000, 
+                        help='Number of coarse optimization iterations.')
+    parser.add_argument('--skip_coarse', type=str2bool, default=False, 
+                        help='If True, will skip coarse optimization.')
     
     # Extract mesh
     parser.add_argument('-l', '--surface_level', type=float, default=0.3, 
@@ -48,12 +60,16 @@ if __name__ == "__main__":
                         help='Max coordinates to use for foreground.')
     parser.add_argument('--center_bbox', type=str2bool, default=True, 
                         help='If True, center the bbox. Default is False.')
+    parser.add_argument('--skip_cm', type=str2bool, default=False, 
+                        help='If True, will skip coarse mesh extraction.')
     
     # Parameters for refined SuGaR
     parser.add_argument('-g', '--gaussians_per_triangle', type=int, default=1, 
                         help='Number of gaussians per triangle.')
     parser.add_argument('-f', '--refinement_iterations', type=int, default=15_000, 
                         help='Number of refinement iterations.')
+    parser.add_argument('--skip_refine', type=str2bool, default=False, 
+                        help='If True, will skip refined optimization.')
     
     # (Optional) Parameters for textured mesh extraction
     parser.add_argument('-t', '--export_uv_textured_mesh', type=str2bool, default=True, 
@@ -84,13 +100,22 @@ if __name__ == "__main__":
                         help="Default configs for time to spend on refinement. Can be 'short', 'medium' or 'long'.")
       
     # Evaluation split
-    parser.add_argument('--eval', type=str2bool, default=True, help='Use eval split.')
+    parser.add_argument('--eval', type=str2bool, default=False, help='Use eval split.')
 
     # GPU
     parser.add_argument('--gpu', type=int, default=0, help='Index of GPU device to use.')
 
     # Parse arguments
     args = parser.parse_args()
+
+    # # -- log setting -- # => substituted by python | tee log.txt
+    # if args.output_path:
+    #     os.makedirs(args.output_path, exist_ok=True)
+    #     sys.stdout = open(os.path.join(args.output_path, 'log.txt'), 'w')
+    # else:
+    #     os.makedirs('./output', exist_ok=True)
+    #     sys.stdout = open(os.path.join('./output', 'log.txt'), 'w')
+
     if args.low_poly:
         args.n_vertices_in_mesh = 200_000
         args.gaussians_per_triangle = 6
@@ -118,20 +143,33 @@ if __name__ == "__main__":
         'checkpoint_path': args.checkpoint_path,
         'scene_path': args.scene_path,
         'iteration_to_load': args.iteration_to_load,
-        'output_dir': None,
+        # 'output_dir': None,
+        'output_dir': args.output_path,
         'eval': args.eval,
         'estimation_factor': 0.2,
         'normal_factor': 0.2,
         'gpu': args.gpu,
         'resolution': args.resolution, # NOTE: rescale gt image due to OOM issue
+        'num_sdf_iterations': args.sdf_iterations, # NOTE: reduce coarse optimization iterations due to time reduction
     })
-    if args.regularization_type == 'sdf':
-        coarse_sugar_path = coarse_training_with_sdf_regularization(coarse_args)
-    elif args.regularization_type == 'density':
-        coarse_sugar_path = coarse_training_with_density_regularization(coarse_args)
+    if not args.skip_coarse:
+        coarse_start = time.time()
+        if args.regularization_type == 'sdf':
+            coarse_sugar_path = coarse_training_with_sdf_regularization(coarse_args)
+        elif args.regularization_type == 'density':
+            coarse_sugar_path = coarse_training_with_density_regularization(coarse_args)
+        else:
+            raise ValueError(f'Unknown regularization type: {args.regularization_type}')
+        print(f"Coarse SuGaR optimized. Elapsed time: {timedelta(seconds=time.time() - coarse_start)}")
     else:
-        raise ValueError(f'Unknown regularization type: {args.regularization_type}')
-    
+        sugar_checkpoint_path = f'sugarcoarse_3Dgs{args.iteration_to_load}_sdfestimXX_sdfnormYY/'
+        sugar_checkpoint_path = os.path.join(args.output_path, sugar_checkpoint_path)
+        sugar_checkpoint_path = sugar_checkpoint_path.replace(
+            'XX', str(0.2).replace('.', '') # NOTE: sdf_estimation_factor, fixed to 0.2
+            ).replace(
+                'YY', str(0.2).replace('.', '') # NOTE: sdf_better_normal_factor, fixed to 0.2
+                )
+        coarse_sugar_path = os.path.join(sugar_checkpoint_path, f'{args.sdf_iterations}.pt')
     
     # ----- Extract mesh from coarse SuGaR -----
     coarse_mesh_args = AttrDict({
@@ -141,7 +179,8 @@ if __name__ == "__main__":
         'coarse_model_path': coarse_sugar_path,
         'surface_level': args.surface_level,
         'decimation_target': args.n_vertices_in_mesh,
-        'mesh_output_dir': None,
+        # 'mesh_output_dir': None,
+        'mesh_output_dir': args.output_path,
         'bboxmin': args.bboxmin,
         'bboxmax': args.bboxmax,
         'center_bbox': args.center_bbox,
@@ -150,8 +189,28 @@ if __name__ == "__main__":
         'use_centers_to_extract_mesh': False,
         'use_marching_cubes': False,
         'use_vanilla_3dgs': False,
+        'square_size': args.square_size,
+        'resolution': args.resolution, # NOTE: rescale gt image due to OOM issue
     })
-    coarse_mesh_path = extract_mesh_from_coarse_sugar(coarse_mesh_args)[0]
+    if not args.skip_cm:
+        coarse_mesh_start = time.time()
+        COARSE_TEX = False
+        if COARSE_TEX:
+            coarse_mesh_path = extract_mesh_and_texture_from_coarse_sugar(coarse_mesh_args)[0] # TODO: AttributeError: 'SuGaR' object has no attribute 'surface_mesh'
+        else:
+            coarse_mesh_path = extract_mesh_from_coarse_sugar(coarse_mesh_args)[0]
+        print(f"Mesh extracted from coarse SuGaR. Elapsed time: {timedelta(seconds=time.time() - coarse_mesh_start)}")
+    else:
+        coarse_mesh_path = []
+        sugar_mesh_path = 'sugarmesh_' + coarse_sugar_path.split('/')[-2].replace('sugarcoarse_', '') + '_levelZZ_decimAA.ply'
+        sugar_mesh_path = sugar_mesh_path.replace(
+            'ZZ', str(args.surface_level).replace('.', '')
+            ).replace(
+                'AA', str(args.n_vertices_in_mesh).replace('.', '')
+                )
+        sugar_mesh_path = os.path.join(args.output_path, sugar_mesh_path)
+        # coarse_mesh_path.append(sugar_mesh_path)
+        coarse_mesh_path = sugar_mesh_path
     
     
     # ----- Refine SuGaR -----
@@ -159,7 +218,8 @@ if __name__ == "__main__":
         'scene_path': args.scene_path,
         'checkpoint_path': args.checkpoint_path,
         'mesh_path': coarse_mesh_path,      
-        'output_dir': None,
+        # 'output_dir': None,
+        'output_dir': args.output_path,
         'iteration_to_load': args.iteration_to_load,
         'normal_consistency_factor': 0.1,    
         'gaussians_per_triangle': args.gaussians_per_triangle,        
@@ -170,9 +230,23 @@ if __name__ == "__main__":
         'export_ply': args.export_ply,
         'eval': args.eval,
         'gpu': args.gpu,
+        'resolution': args.resolution, # NOTE: rescale gt image due to OOM issue
     })
-    refined_sugar_path = refined_training(refined_args)
-    
+    if not args.skip_refine:
+        refined_start = time.time()
+        refined_sugar_path = refined_training(refined_args)
+        print(f"SuGaR refined. Elapsed time: {timedelta(seconds=time.time() - refined_start)}")
+    else:
+        mesh_name = coarse_mesh_path.split("/")[-1].split(".")[0]
+        sugar_checkpoint_path = 'sugarfine_' + mesh_name.replace('sugarmesh_', '') + '_normalconsistencyXX_gaussperfaceYY/'
+        sugar_checkpoint_path = os.path.join(args.output_path, sugar_checkpoint_path)
+        sugar_checkpoint_path = sugar_checkpoint_path.replace(
+            'XX', str(0.1).replace('.', '') # NOTE: normal_consistency_factor, fixed to 0.1
+            ).replace(
+            'YY', str(args.gaussians_per_triangle).replace('.', '')
+            )
+        refined_sugar_path = os.path.join(sugar_checkpoint_path, f'{args.refinement_iterations}.pt')
+
     
     # ----- Extract mesh and texture from refined SuGaR -----
     if args.export_uv_textured_mesh:
@@ -181,7 +255,8 @@ if __name__ == "__main__":
             'iteration_to_load': args.iteration_to_load,
             'checkpoint_path': args.checkpoint_path,
             'refined_model_path': refined_sugar_path,
-            'mesh_output_dir': None,
+            # 'mesh_output_dir': None,
+            'mesh_output_dir': args.output_path,
             'n_gaussians_per_surface_triangle': args.gaussians_per_triangle,
             'square_size': args.square_size,
             'eval': args.eval,
@@ -189,6 +264,10 @@ if __name__ == "__main__":
             'postprocess_mesh': args.postprocess_mesh,
             'postprocess_density_threshold': args.postprocess_density_threshold,
             'postprocess_iterations': args.postprocess_iterations,
+            'resolution': args.resolution, # NOTE: rescale gt image due to OOM issue
         })
+        refined_mesh_start = time.time()
         refined_mesh_path = extract_mesh_and_texture_from_refined_sugar(refined_mesh_args)
+        print(f"Mesh extracted from refined SuGaR. Elapsed time: {timedelta(seconds=time.time() - refined_mesh_start)}")
         
+    # sys.stdout.close()
